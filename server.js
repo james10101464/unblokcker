@@ -13,14 +13,23 @@ const app = express();
 // Serve frontend files from public folder
 app.use(express.static(path.join(__dirname, "public")));
 
-// Encode target URLs like: /proxy/https://example.com/path
+// Proxy route
 app.use("/proxy/", async (req, res) => {
-  const targetUrl = decodeURIComponent(req.url.slice(1 + "proxy/".length));
+  let rawUrl = decodeURIComponent(req.url.slice(1 + "proxy/".length));
+  let targetUrl;
+
+  try {
+    // Try to parse as full URL
+    targetUrl = new URL(rawUrl);
+  } catch {
+    // If it's relative (like /cdn/image.png), prepend https://discord.com
+    targetUrl = new URL(rawUrl, "https://discord.com");
+  }
 
   try {
     const r = await fetch(targetUrl, {
       method: req.method,
-      headers: { ...req.headers, host: new URL(targetUrl).host },
+      headers: { ...req.headers, host: targetUrl.host },
       body: req.method === "GET" ? undefined : req,
     });
 
@@ -38,7 +47,11 @@ app.use("/proxy/", async (req, res) => {
     let body;
     const ct = r.headers.get("content-type") || "";
     if (ct.includes("text/html") || ct.includes("application/javascript") || ct.includes("text/css")) {
-      body = (await r.text()).replace(/https?:\/\/[^"'\s]+/g, (url) => {
+      body = (await r.text()).replace(/(href|src|action)=["'](\/[^"']+)/g, (match, attr, url) => {
+        // Rewrite relative paths
+        return `${attr}="/proxy/${encodeURIComponent(url)}"`;
+      }).replace(/https?:\/\/[^"'\s]+/g, (url) => {
+        // Rewrite absolute URLs
         return "/proxy/" + encodeURIComponent(url);
       });
     } else {
