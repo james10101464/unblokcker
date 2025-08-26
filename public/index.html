@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Mini Rewriting Proxy</title>
+  <style>
+    body { font-family: sans-serif; padding: 2em; }
+    input { width: 80%; padding: 0.5em; }
+    button { padding: 0.5em 1em; }
+  </style>
+</head>
+<body>
+  <h1>Mini Rewriting Proxy</h1>
+  <form id="proxyForm">
+    <input type="text" id="url" placeholder="Enter full URL (https://...)" />
+    <button type="submit">Go</button>
+  </form>
+
+  <script>
+    document.getElementById("proxyForm").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const url = document.getElementById("url").value;
+      if (url.startsWith("http")) {
+        window.location.href = "/proxy/" + encodeURIComponent(url);
+      } else {
+        alert("Please enter a full URL including http:// or https://");
+      }
+    });
+  </script>
+</body>
+</html>
