@@ -1,79 +1,58 @@
-import express from "express";
-import fetch from "node-fetch";
-import http from "http";
-import { WebSocketServer } from "ws";
-import path from "path";
-import { fileURLToPath } from "url";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const express = require("express");
+const { createProxyServer } = require("http-proxy");
+const http = require("http");
 
 const app = express();
 
-// Serve frontend files from public folder
-app.use(express.static(path.join(__dirname, "public")));
+// Create proxy with WebSocket support
+const proxy = createProxyServer({
+  changeOrigin: true,
+  ws: true,
+  secure: false, // allow self-signed SSL if needed
+});
 
-// Proxy route
-app.use("/proxy/", async (req, res) => {
-  let rawUrl = decodeURIComponent(req.url.slice(1 + "proxy/".length));
-  let targetUrl;
+// Default target (Discord login page)
+const DEFAULT_TARGET = "https://discord.com";
 
-  try {
-    // Try to parse as full URL
-    targetUrl = new URL(rawUrl);
-  } catch {
-    // If it's relative (like /cdn/image.png), prepend https://discord.com
-    targetUrl = new URL(rawUrl, "https://discord.com");
+// Rewrite response headers to avoid CSP / frame issues
+proxy.on("proxyRes", (proxyRes, req, res) => {
+  // Remove security headers that break embedding
+  delete proxyRes.headers["content-security-policy"];
+  delete proxyRes.headers["x-frame-options"];
+  delete proxyRes.headers["cross-origin-embedder-policy"];
+  delete proxyRes.headers["cross-origin-opener-policy"];
+  delete proxyRes.headers["cross-origin-resource-policy"];
+
+  // Rewrite Location redirects to stay inside proxy
+  if (proxyRes.headers["location"]) {
+    const loc = proxyRes.headers["location"];
+    proxyRes.headers["location"] = `/?target=${encodeURIComponent(loc)}`;
   }
+});
 
+// Proxy HTTP requests
+app.use((req, res) => {
+  const target = req.query.target || DEFAULT_TARGET;
   try {
-    const r = await fetch(targetUrl, {
-      method: req.method,
-      headers: { ...req.headers, host: targetUrl.host },
-      body: req.method === "GET" ? undefined : req,
+    proxy.web(req, res, { target }, (err) => {
+      console.error("Proxy error:", err);
+      res.status(500).send("Proxy error: " + err.message);
     });
-
-    const headers = {};
-    r.headers.forEach((v, k) => {
-      if (k === "set-cookie") {
-        headers[k] = v.replace(/; *Domain=[^;]+/gi, "").replace(/; *Path=[^;]+/gi, "");
-      } else if (k === "location") {
-        headers[k] = "/proxy/" + encodeURIComponent(v);
-      } else {
-        headers[k] = v;
-      }
-    });
-
-    let body;
-    const ct = r.headers.get("content-type") || "";
-    if (ct.includes("text/html") || ct.includes("application/javascript") || ct.includes("text/css")) {
-      body = (await r.text()).replace(/(href|src|action)=["'](\/[^"']+)/g, (match, attr, url) => {
-        // Rewrite relative paths
-        return `${attr}="/proxy/${encodeURIComponent(url)}"`;
-      }).replace(/https?:\/\/[^"'\s]+/g, (url) => {
-        // Rewrite absolute URLs
-        return "/proxy/" + encodeURIComponent(url);
-      });
-    } else {
-      body = Buffer.from(await r.arrayBuffer());
-    }
-
-    res.writeHead(r.status, headers);
-    res.end(body);
   } catch (err) {
-    res.status(500).send("Proxy error: " + err.message);
+    res.status(500).send("Invalid target URL");
   }
 });
 
-// WebSocket passthrough
+// Create server with WebSocket support
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
 
-wss.on("connection", (ws) => {
-  console.log("🔌 WebSocket connected to proxy");
+server.on("upgrade", (req, socket, head) => {
+  const target = DEFAULT_TARGET;
+  proxy.ws(req, socket, head, { target });
 });
 
+// Use Cyclic/Railway PORT or 3000 locally
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () =>
-  console.log(`Mini rewrite proxy running at http://localhost:${PORT}`)
-);
+server.listen(PORT, () => {
+  console.log(`Proxy server running at http://localhost:${PORT}`);
+});
